@@ -1,0 +1,603 @@
+---
+title: "ISYE_Project"
+author: "Group21"
+date: "2024-03-26"
+output: html_document
+---
+```{r setup, include=FALSE}
+library(reticulate)
+reticulate::use_python("C:/Users/19073/anaconda3/python.exe")
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+import scipy.io as sio
+from scipy.stats import norm
+import scipy.stats as stats
+
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
+import matplotlib.gridspec as gridspec
+
+from mlxtend.plotting import plot_decision_regions
+
+from sklearn.model_selection import KFold
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, recall_score, make_scorer
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_curve, auc,  precision_score 
+from sklearn.decomposition import PCA
+from sklearn.datasets import make_classification
+from sklearn import datasets, metrics, svm
+from sklearn.svm import SVC
+from sklearn.utils import resample
+from sklearn.neural_network import MLPClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import Ridge
+from sklearn.linear_model import LassoCV
+from sklearn.linear_model import Lasso
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.tree import DecisionTreeClassifier
+
+
+from yellowbrick.regressor import AlphaSelection 
+
+
+import numpy as np
+from numpy import mean
+from numpy import std
+import pandas as pd
+import seaborn as sns
+
+import cv2
+import os
+import random
+import statistics
+import math 
+```
+
+Normalization involves scaling data values in a range between [0,1] or [-1,1], and is best for unknown or non-normal distributions. Data standardization involves scaling data values so that they have a mean of 0 and standard deviation of 1, and is best for normal distributions.
+https://builtin.com/data-science/when-and-why-standardize-your-data
+
+Z-score
+
+Z-score is one of the most popular methods to standardize data, and can be done by subtracting the mean and dividing by the standard deviation for each value of each feature.
+z-score standard deviation
+
+Once the standardization is done, all the features will have a mean of zero and a standard deviation of one, and thus, the same scale.
+Scaled data has zero mean and unit variance:
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+random.seed(123)
+
+dat = pd.read_csv("Hib_Dat.csv")
+```
+
+```{python}
+#scale numrical data
+datval = dat.iloc[:, 3:]
+scaler= StandardScaler().fit(datval)
+datscale = scaler.transform(datval)
+datscale1 = pd.DataFrame(datscale)
+
+#add coulmn names
+colnames = dat.iloc[:, 3:]
+
+datscale2= pd.DataFrame(data=datscale1.values, columns=colnames.columns)
+
+#combine with group data
+datgp = dat.iloc[:, 2]
+dattot = pd.concat([datgp,datscale2], axis=1)
+
+
+#dattot.dtypes
+```
+
+################################
+TRAINING AND TEST DATA MUNGING
+################################
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#remove transition animals and run t-test for feature selection on experimental groups
+#https://stackoverflow.com/questions/58757557/t-test-for-multiple-columns-after-groupby-pandas
+datexp = dattot[dattot['BigSeason'].str.contains(r'Summer|Winter')]
+
+#Convert Label to Binary
+datexp.BigSeason[datexp.BigSeason == 'Summer'] = 1
+datexp.BigSeason[datexp.BigSeason == 'Winter'] = 0
+
+
+#or x in datexp:
+#    if x != 'BigSeason':
+#        # convert column to float
+#        datexp.loc[x] = datexp.loc[x].astype(float)
+
+tstats = {}
+ix_a = datexp['BigSeason'] == 1
+
+for x in datexp:
+    if x != 'BigSeason':
+        # convert column to float
+        datexp[x] = datexp[x].astype(float)
+        #get p-value for ttest
+        #tstats['t_' + x] = stats.ttest_ind(datexp[x][ix_a], datexp[x][~ix_a])[1]
+        tstats[x] = stats.ttest_ind(datexp[x][ix_a], datexp[x][~ix_a])[1]
+
+#try1 = datexp.groupby('BigSeason').mean().assign(**tstats)
+try1 = datexp.groupby('BigSeason').mean().assign(**tstats)
+
+#try2 = try1.filter(regex='t_')[abs(try1) <= 0.000000001] 
+try2 = try1[abs(try1) <= 0.000000001]
+
+#0.01 --> 90 features
+#0.001 --> 71 features
+#0.0001 --> 62 features
+#0.00001 --> 48 features
+#0.000001 --> 41 features
+#0.0000001 --> 35 features
+#0.00000001 --> 31 features
+#0.000000001 --> 21 features
+
+#drop NaN
+try3 = try2.dropna(axis=1, how='all')
+
+feats = list(try3.columns)
+feats.insert(0, 'BigSeason')
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#make the smaller dataset
+datsm = datexp[datexp.columns[datexp.columns.isin(feats)]]
+
+#split into training and testing (70/30)
+X = datsm.iloc[:, 1:] 
+y = datsm['BigSeason'] 
+y = y.astype(int)
+  
+# using the train test split function
+X_train, X_test, y_train, y_test = train_test_split(X,y , 
+                                   random_state=123,  
+                                   test_size=0.30,  
+                                   shuffle=True) 
+y_train = y_train.astype(int)
+y_test = y_test.astype(int)
+```
+
+################################
+PREDICTION DATA MUNGING
+################################
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#keep only transition animals 
+dattran = dattot[dattot['BigSeason'].str.contains(r'TansitionTest')]
+
+featstrans = list(try3.columns)
+
+dattran_sm =  dattran[dattran.columns.intersection(featstrans)]
+
+```
+
+################################
+TRAINING DATA SET
+################################
+
+Logistic Regression
+10-fold Cross Validation
+```{python}
+#https://www.geeksforgeeks.org/ml-logistic-regression-using-python/#google_vignette
+# prepare the cross-validation procedure
+cv = KFold(n_splits=10, random_state=123, shuffle=True)
+# create model
+model = LogisticRegression()
+# evaluate model
+scores = cross_val_score(model, X_train, y_train, scoring='accuracy', cv=cv, n_jobs=-1)
+# report performance
+#print('Accuracy: %.3f (%.3f)' % (mean(scores), std(scores)))
+```
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#https://www.geeksforgeeks.org/ml-logistic-regression-using-python/#google_vignette
+
+# Train the Logistic Regression model
+model = LogisticRegression()
+model.fit(X_train, y_train)
+
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+# Evaluate the model
+LR_pred = model.predict(X_train)
+```
+
+
+```{python}
+cm1 = confusion_matrix(y_train,LR_pred)
+print('LOGISTIC REGRESSION Confusion Matrix : \n', cm1)
+
+total1=sum(sum(cm1))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm1[0,0]+cm1[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm1[0,0]/(cm1[0,0]+cm1[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm1[1,1]/(cm1[1,0]+cm1[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_train,LR_pred))
+```
+
+Support Vector Machines (SVM)
+10-fold Cross Validation
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#https://medium.com/@hammad.ai/using-grid-search-for-hyper-parameter-tuning-bad6756324cc
+#SVM takes two parameters named C and kernel, so we defined three different values for both of the parameters in an array. 
+
+#C here is known as the regularization parameter or the cost parameter, which controls the trade-off between maximizing the margin (distance between the decision boundary and the data points) and minimizing the classification error on the training data.
+
+#kernel here represents the kernel typer used for this model. This is a common parameter which you will find in kernel-based models. It is used to specify the type of kernel function to be used when transforming the input data into a higher-dimensional space.
+
+param_grid = {
+    'C': [0.1, 1, 10],
+    'kernel': ['linear', 'rbf', 'poly']
+}
+```
+
+
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#The first argument is the model which we want to evaluate. The second argument is the grid configuration we made earlier using python dictionary.
+
+#The cv argument accepts integers and represents the number folds we want our cross-validation to perform.
+
+#scoring represents the strategy employed to evaluate the model in question. Here we are using "accuracy" which means that we want to evaluate the model using its accuracy score. The default value for this argument is specified by the type of the model being used. For SVC the usual scoring metric is accuracy.
+
+#grid_search_svm = GridSearchCV(SVC(), param_grid, cv=cv, scoring='accuracy')
+#grid_search_svm.fit(X_train, y_train)
+```
+
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#Get the best scores  
+#Access the best_params_ attribute from the processed GridSearchCV object. This gives you a dictionary output.
+best_params = grid_search_svm.best_params_
+best_score = grid_search_svm.best_score_
+```
+
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#Final model training  
+#Now you will train the model again, but this time using the parameter values which got the highest scores.
+
+#final_model_svm = SVC(
+#  C = best_params['C'], 
+#  kernel = best_params['kernel'])
+
+#final_model_svm.fit(X_train, y_train)
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+svm_pred = final_model_svm.predict(X_train)
+
+print("Accuracy for SVM on CV data: ", accuracy_score(y_train,svm_pred))
+```
+
+```{python}
+cm1 = confusion_matrix(y_train,svm_pred)
+print('SVM Confusion Matrix : \n', cm1)
+
+total1=sum(sum(cm1))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm1[0,0]+cm1[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm1[0,0]/(cm1[0,0]+cm1[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm1[1,1]/(cm1[1,0]+cm1[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_train, svm_pred))
+```
+
+Random Forest
+10-fold Cross Validation
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+rfc=RandomForestClassifier(random_state=123)
+
+param_grid2 = { 
+    'n_estimators': [100, 200, 500],
+    'max_features': [None, 'sqrt', 'log2'],
+    'max_depth' : [4,5,6,7,8],
+    'criterion' :['gini', 'entropy']
+}
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#grid_search_rfc = GridSearchCV(estimator=rfc, param_grid=param_grid2, cv= cv)
+#(X_train, y_train)
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+grid_search_rfc.best_params_
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+rfc=RandomForestClassifier(random_state=123, max_features=None, n_estimators= 100, max_depth=4, criterion='gini')
+rfc.fit(X_train, y_train)
+```
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+rf_pred=rfc.predict(X_train)
+print("Accuracy for Random Forest on CV data: ",accuracy_score(y_train,rf_pred))
+```
+```{python}
+cm_rf = confusion_matrix(y_train,rf_pred)
+print('RANDOM FOREST Confusion Matrix : \n', cm_rf)
+
+total1=sum(sum(cm_rf))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm_rf[0,0]+cm_rf[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm_rf[0,0]/(cm_rf[0,0]+cm_rf[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm_rf[1,1]/(cm_rf[1,0]+cm_rf[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_train, rf_pred))
+```
+
+Decision Tree
+10-fold Cross Validation
+```{python, echo=FALSE, message=FALSE, warning=FALSE}}
+tree_class = DecisionTreeClassifier(random_state=123)
+
+param_grid3 = {'max_features': ['auto', 'sqrt', 'log2'],
+              'ccp_alpha': [0.1, .01, .001],
+              'max_depth' : [5, 6, 7, 8, 9],
+              'criterion' :['gini', 'entropy']
+             }
+
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#grid_search_tree = GridSearchCV(estimator=tree_class, param_grid=param_grid3, cv=cv, verbose=True)
+#grid_search_tree.fit(X_train, y_train)
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+tree_final_model = grid_search_tree.best_estimator_
+tree_final_model
+```
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#Training the model
+tree_clf = DecisionTreeClassifier(ccp_alpha=0.1, class_weight=None, criterion='entropy',  max_depth=5, max_features='sqrt', max_leaf_nodes=None, min_impurity_decrease=0.0, min_samples_leaf=1, min_samples_split=2, min_weight_fraction_leaf=0.0, random_state=123, splitter='best')
+
+tree_clf.fit(X_train, y_train)
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+tree_pred = tree_clf.predict(X_train)
+```
+```{python}
+cm_tree = confusion_matrix(y_train,tree_pred)
+print('DECISION TREE Confusion Matrix : \n', cm_tree)
+
+total1=sum(sum(cm_tree))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm_tree[0,0]+cm_tree[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm_tree[0,0]/(cm_tree[0,0]+cm_tree[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm_tree[1,1]/(cm_tree[1,0]+cm_tree[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_train, tree_pred))
+```
+
+Boosting
+10-fold Cross Validation
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#https://stackoverflow.com/questions/58781601/parameter-tuning-using-gridsearchcv-for-gradientboosting-classifier-in-python
+#creating Scoring parameter: 
+#scoring = {'accuracy': make_scorer(accuracy_score),
+#           'precision': make_scorer(precision_score),
+#           'recall':make_scorer(recall_score)}
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+boost_class = GradientBoostingClassifier(random_state=123)
+
+param_grid4 = {
+    "loss":['exponential', 'log_loss'],
+    "learning_rate": [0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2],
+    "min_samples_split": np.linspace(0.1, 0.5, 12),
+    "min_samples_leaf": np.linspace(0.1, 0.5, 12),
+    "max_depth":[3,5,8],
+    "max_features":["log2","sqrt"],
+    "criterion": ['friedman_mse', 'squared_error'],
+    "subsample":[0.5, 0.618, 0.8, 0.85, 0.9, 0.95, 1.0],
+    "n_estimators":[10]
+    }
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#grid_boost = GridSearchCV(estimator=boost_class, param_grid=param_grid4, refit=False, cv=cv, n_jobs=-1)
+#grid_boost.fit(X_train, y_train)
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+boost_final_model = grid_boost.best_params_
+boost_final_model
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+#Training the model
+boost_clf = GradientBoostingClassifier(criterion='friedman_mse', learning_rate= 0.05, loss = 'exponential', max_depth=3, max_features='log2', min_samples_leaf=0.24545454545454548, min_samples_split=0.1, n_estimators=10, subsample = 0.618)
+
+boost_clf.fit(X_train, y_train)
+```
+
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+boost_pred = boost_clf.predict(X_train)
+```
+
+```{python}
+cm1 = confusion_matrix(y_train,boost_pred)
+print('BOOSTING - Confusion Matrix : \n', cm1)
+
+total1=sum(sum(cm1))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm1[0,0]+cm1[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm1[0,0]/(cm1[0,0]+cm1[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm1[1,1]/(cm1[1,0]+cm1[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_train,boost_pred))
+```
+################################
+TEST DATA SET
+################################
+
+Logistic Regression
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+# Evaluate the model
+LR_predT = model.predict(X_test)
+
+cm1 = confusion_matrix(y_test,LR_predT)
+print('LOGISTIC REGRESSION- TEST DATA \nConfusion Matrix : \n', cm1)
+
+total1=sum(sum(cm1))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm1[0,0]+cm1[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm1[0,0]/(cm1[0,0]+cm1[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm1[1,1]/(cm1[1,0]+cm1[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_test,LR_predT))
+```
+
+Support Vector Machines (SVM)
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+svm_predT = final_model_svm.predict(X_test)
+
+cm1 = confusion_matrix(y_test,svm_predT)
+print('SVM - TEST DATA \nConfusion Matrix : \n', cm1)
+
+total1=sum(sum(cm1))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm1[0,0]+cm1[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm1[0,0]/(cm1[0,0]+cm1[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm1[1,1]/(cm1[1,0]+cm1[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_test,svm_predT))
+```
+
+Random Forest
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+rf_predT=rfc.predict(X_test)
+
+cm_rf = confusion_matrix(y_test,rf_predT)
+print('RANDOM FOREST - TEST DATA \nConfusion Matrix : \n', cm_rf)
+
+total1=sum(sum(cm_rf))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm_rf[0,0]+cm_rf[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm_rf[0,0]/(cm_rf[0,0]+cm_rf[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm_rf[1,1]/(cm_rf[1,0]+cm_rf[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_test,rf_predT))
+```
+
+Decision Tree
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+tree_predT = tree_clf.predict(X_test)
+
+cm_tree = confusion_matrix(y_test,tree_predT)
+print('DECISION TREE - TEST DATA \nConfusion Matrix : \n', cm_tree)
+
+total1=sum(sum(cm_tree))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm_tree[0,0]+cm_tree[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm_tree[0,0]/(cm_tree[0,0]+cm_tree[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm_tree[1,1]/(cm_tree[1,0]+cm_tree[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_test, tree_predT))
+```
+
+Boosting
+```{python, echo=FALSE, message=FALSE, warning=FALSE}
+boost_predT = boost_clf.predict(X_test)
+
+cm1 = confusion_matrix(y_test,boost_predT)
+print('BOOSTING - TEST DATA \nConfusion Matrix : \n', cm1)
+
+total1=sum(sum(cm1))
+#####from confusion matrix calculate accuracy
+accuracy1=(cm1[0,0]+cm1[1,1])/total1
+print ('Accuracy : ', accuracy1)
+
+sensitivity1 = cm1[0,0]/(cm1[0,0]+cm1[0,1])
+print('Sensitivity : ', sensitivity1 )
+
+specificity1 = cm1[1,1]/(cm1[1,0]+cm1[1,1])
+print('Specificity : ', specificity1)
+print('\n\n')
+print(classification_report(y_test,boost_predT))
+```
+
+
+################################
+PREDICTION DATA SET
+################################
+
+```{python}
+LR_trans = pd.DataFrame(model.predict(dattran_sm))
+svm_trans = pd.DataFrame(final_model_svm.predict(dattran_sm))
+rf_trans = pd.DataFrame(rfc.predict(dattran_sm))
+
+```
+
+```{python}
+translabs = dat.iloc[57:93, 0:1]
+
+test = pd.concat([LR_trans, svm_trans, rf_trans], axis=1)
+test.columns =['Linear Regresson', 'SVM', 'Random Forest']
+
+translabs = translabs.reset_index(drop=True)
+test = test.reset_index(drop=True)
+
+transpred = translabs.join(test)
+transpred
+```
+
+
